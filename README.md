@@ -4,6 +4,11 @@ Addestramento di un AI generativa TTS in italiano
 ``` python
 python train_speecht5.py # Downloads data, processes everything, saves to cache
 ```
+Esecuzione non interattiva:
+
+``` python
+python train_speecht5.py --yes # Non interactive 
+```
 Questa esecuzione fa caching di vari elementi, per cui puo' essere utile anche forzare il ricalcolo:
 
 ``` python

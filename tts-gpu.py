@@ -21,7 +21,7 @@ def print_step(step_num, description):
 def ask_user_confirmation(message):
     """Ask user for confirmation before proceeding"""
     response = input(f"{message} (y/n): ").lower().strip()
-    return response in ['y', 'yes', '']
+    return response in ['y', 'yes']
 
 def check_gpu():
     """Check GPU availability and memory"""
@@ -84,10 +84,15 @@ def main():
                        help='Clear all cached data and start fresh')
     parser.add_argument('--cache-dir', type=str, default='cache',
                        help='Directory to store cache files (default: cache)')
+    parser.add_argument('-y', '--yes', action='store_true',
+                       help='Run without interactive prompts (assume yes to all)')
     args = parser.parse_args()
     
     print("🎤 SpeechT5 Italian Fine-tuning Script")
     print("=====================================")
+    
+    if args.yes:
+        print("🤖 Running in non-interactive mode (--yes flag)")
     
     # Get cache paths
     cache_paths = get_cache_paths()
@@ -102,11 +107,12 @@ def main():
                 cache_path.unlink()
                 print(f"   Deleted: {cache_path}")
         print("✅ Cache cleared")
+        exit(0)
     
     # Check GPU first
     has_gpu = check_gpu()
     
-    if not ask_user_confirmation("Do you want to continue with the training?"):
+    if not args.yes and not ask_user_confirmation("Do you want to continue with the training?"):
         print("Training cancelled by user.")
         return
     
@@ -114,10 +120,11 @@ def main():
     print_step(1, "Dependencies")
     print("Make sure you have installed:")
     print("- pip install datasets==3.6.0")
+    print("- pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118")
     print("- pip install soundfile speechbrain accelerate")
     print("- pip install git+https://github.com/huggingface/transformers.git")
     
-    if not ask_user_confirmation("Are all dependencies installed?"):
+    if not args.yes and not ask_user_confirmation("Are all dependencies installed?"):
         print("Please install dependencies first.")
         return
     
@@ -438,7 +445,7 @@ def main():
     
     # Step 12: Start training
     print_step(12, "Starting Training")
-    if ask_user_confirmation("Start training now?") == False:
+    if not args.yes and not ask_user_confirmation("Start training now?"):
         print("Training cancelled by user.")
         return
     
@@ -453,7 +460,15 @@ def main():
         processor.save_pretrained("speecht5_finetuned_voxpopuli_it")
         print("✅ Model saved!")
         
-        if ask_user_confirmation("Push model to Hugging Face Hub?"):
+        # Auto-push to hub if --yes flag is used, otherwise ask
+        if args.yes:
+            print("🤖 Auto-pushing to Hugging Face Hub (--yes mode)")
+            try:
+                trainer.push_to_hub()
+                print("✅ Model pushed to hub!")
+            except Exception as e:
+                print(f"⚠️ Failed to push to hub: {e}")
+        elif ask_user_confirmation("Push model to Hugging Face Hub?"):
             trainer.push_to_hub()
             print("✅ Model pushed to hub!")
             
