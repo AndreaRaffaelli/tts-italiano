@@ -1,0 +1,293 @@
+---
+- name: Setup CUDA and Python Environment for SpeechT5 Training
+  hosts: all
+  become: true
+  vars:
+    python_version: "3.10"
+    venv_name: "speecht5_env"
+    venv_path: "/home/{{ ansible_user }}/{{ venv_name }}"
+    requirements_file: "requirements.txt"
+    cuda_keyring_url: "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb"
+    cuda_keyring_file: "/tmp/cuda-keyring_1.1-1_all.deb"
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install required system packages
+      ansible.builtin.apt:
+        name:
+          - wget
+          - git
+          - curl
+          - python{{ python_version }}
+          - python{{ python_version }}-venv
+          - python{{ python_version }}-dev
+          - python3-pip
+          - build-essential
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Check if CUDA drivers are already installed
+      ansible.builtin.command: nvidia-smi
+      register: nvidia_check
+      failed_when: false
+      changed_when: false
+
+    - name: CUDA Installation Block
+      when: nvidia_check.rc != 0
+      block:
+        - name: Download CUDA keyring
+          ansible.builtin.get_url:
+            url: "{{ cuda_keyring_url }}"
+            dest: "{{ cuda_keyring_file }}"
+            mode: '0644'
+
+        - name: Install CUDA keyring
+          ansible.builtin.apt:
+            deb: "{{ cuda_keyring_file }}"
+            state: present
+
+        - name: Update apt cache after adding CUDA repository
+          ansible.builtin.apt:
+            update_cache: true
+
+        - name: Install CUDA drivers
+          ansible.builtin.apt:
+            name: cuda-drivers
+            state: present
+          register: cuda_install
+          notify: Reboot after CUDA installation
+
+        - name: Clean up CUDA keyring file
+          ansible.builtin.file:
+            path: "{{ cuda_keyring_file }}"
+            state: absent
+
+        - name: Verify CUDA installation
+          ansible.builtin.command: nvidia-smi
+          register: nvidia_verify
+          become: true
+          become_user: "{{ ansible_user }}"
+          changed_when: false
+
+        - name: Display NVIDIA status
+          ansible.builtin.debug:
+            var: nvidia_verify.stdout_lines
+
+    - name: Display CUDA already installed message
+      ansible.builtin.debug:
+        msg: "CUDA drivers are already installed and working"
+      when: nvidia_check.rc == 0
+
+    - name: Create virtual environment
+      ansible.builtin.command: python{{ python_version }} -m venv {{ venv_path }}
+      args:
+        creates: "{{ venv_path }}/bin/activate"
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Upgrade pip in virtual environment
+      ansible.builtin.pip:
+        name: pip
+        state: present
+        version: latest
+        virtualenv: "{{ venv_path }}"
+        virtualenv_python: python{{ python_version }}
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Check if requirements.txt exists in src directory
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../src/{{ requirements_file }}"
+      register: requirements_stat
+      become: true
+      become_user: "{{ ansible_user }}"
+      delegate_to: localhost
+
+    - name: Check if requirements.txt exists in current directory
+      ansible.builtin.stat:
+        path: "{{ ansible_env.PWD }}/{{ requirements_file }}"
+      register: requirements_current_stat
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: not (requirements_stat.stat.exists or (requirements_current_stat is defined and requirements_current_stat.stat.exists))
+
+    - name: Copy src directory to remote host
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../src/"
+        dest: "/home/{{ ansible_user }}/speecht5_training/"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Make Python scripts executable
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/{{ item }}"
+        mode: '0755'
+      with_fileglob:
+        - "/home/{{ ansible_user }}/*.py"
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Install Python dependencies from requirements.txt
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: requirements_stat.stat.exists or requirements_current_stat.stat.exists
+      block:
+        - name: Install PyTorch with CUDA support from requirements
+          ansible.builtin.pip:
+            name:
+              - torch
+              - torchvision
+              - torchaudio
+            extra_args: --index-url https://download.pytorch.org/whl/cu118
+            virtualenv: "{{ venv_path }}"
+            virtualenv_python: python{{ python_version }}
+
+        - name: Install other requirements (excluding PyTorch)
+          ansible.builtin.pip:
+            requirements: "/home/{{ ansible_user }}/{{ requirements_file }}"
+            virtualenv: "{{ venv_path }}"
+            virtualenv_python: python{{ python_version }}
+            extra_args: --no-deps
+
+        - name: Install transformers from GitHub
+          ansible.builtin.pip:
+            name: git+https://github.com/huggingface/transformers.git
+            virtualenv: "{{ venv_path }}"
+            virtualenv_python: python{{ python_version }}
+
+        - name: Install remaining dependencies
+          ansible.builtin.pip:
+            requirements: "/home/{{ ansible_user }}/{{ requirements_file }}"
+            virtualenv: "{{ venv_path }}"
+            virtualenv_python: python{{ python_version }}
+
+    - name: Install default Python dependencies (if no requirements.txt)
+      ansible.builtin.pip:
+        name:
+          - datasets==3.6.0
+          - soundfile
+          - speechbrain
+          - accelerate
+        virtualenv: "{{ venv_path }}"
+        virtualenv_python: python{{ python_version }}
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: not requirements_stat.stat.exists
+
+    - name: Install PyTorch with CUDA support
+      ansible.builtin.pip:
+        name:
+          - torch
+          - torchvision
+          - torchaudio
+        extra_args: --index-url https://download.pytorch.org/whl/cu118
+        virtualenv: "{{ venv_path }}"
+        virtualenv_python: python{{ python_version }}
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: not requirements_stat.stat.exists
+
+    - name: Install Transformers from GitHub (latest version)
+      ansible.builtin.pip:
+        name: git+https://github.com/huggingface/transformers.git
+        virtualenv: "{{ venv_path }}"
+        virtualenv_python: python{{ python_version }}
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: not requirements_stat.stat.exists
+
+    - name: Install additional dependencies
+      ansible.builtin.pip:
+        name:
+          - matplotlib
+          - numpy
+          - tqdm
+          - pillow
+        virtualenv: "{{ venv_path }}"
+        virtualenv_python: python{{ python_version }}
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: not requirements_stat.stat.exists
+
+    - name: Create activation script
+      ansible.builtin.copy:
+        dest: "/home/{{ ansible_user }}/activate_speecht5.sh"
+        content: |
+          #!/bin/bash
+          echo "🎤 Activating SpeechT5 Environment"
+          echo "=================================="
+          source {{ venv_path }}/bin/activate
+          echo "✅ Virtual environment activated: {{ venv_name }}"
+          echo "🐍 Python version: $(python --version)"
+          echo "🔥 PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
+          echo "🔧 CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
+          if command -v nvidia-smi &> /dev/null; then
+              echo "📱 GPU Info:"
+              nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits
+          fi
+          echo ""
+          echo "💡 To run your training script:"
+          echo "   cd ~/speecht5_training"
+          echo "   python tts-gpu.py --yes"
+          echo ""
+          exec "$SHELL"
+        mode: '0755'
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Add virtual environment activation to .bashrc
+      ansible.builtin.lineinfile:
+        path: "/home/{{ ansible_user }}/.bashrc"
+        line: "alias speecht5='source {{ venv_path }}/bin/activate'"
+        create: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: |
+          🎉 Setup completed successfully!
+
+          📁 Virtual environment created at: {{ venv_path }}
+
+          🚀 To activate the environment:
+             source {{ venv_path }}/bin/activate
+             # OR
+             ./activate_speecht5.sh
+             # OR
+             speecht5  (alias added to .bashrc)
+
+          🔍 To verify CUDA:
+             python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+
+          📁 Training files copied to: /home/{{ ansible_user }}/speecht5_training/
+
+          🚀 To start training:
+             cd ~/speecht5_training
+             python tts-gpu.py --yes
+
+          💡 Your environment is ready for SpeechT5 training!
+
+  handlers:
+    - name: Reboot after CUDA installation
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+        pre_reboot_delay: 10
+        post_reboot_delay: 30
+
+    - name: Wait for system to come back online
+      ansible.builtin.wait_for_connection:
+        delay: 30
+        timeout: 300
