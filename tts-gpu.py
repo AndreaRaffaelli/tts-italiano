@@ -21,7 +21,7 @@ def print_step(step_num, description):
 def ask_user_confirmation(message):
     """Ask user for confirmation before proceeding"""
     response = input(f"{message} (y/n): ").lower().strip()
-    return response in ['y', 'yes']
+    return response in ['y', 'yes', '']
 
 def check_gpu():
     """Check GPU availability and memory"""
@@ -102,7 +102,6 @@ def main():
                 cache_path.unlink()
                 print(f"   Deleted: {cache_path}")
         print("✅ Cache cleared")
-        exit(0)
     
     # Check GPU first
     has_gpu = check_gpu()
@@ -125,6 +124,14 @@ def main():
     # Step 2: Load dataset
     print_step(2, "Loading VoxPopuli Italian Dataset")
     
+    # Import datasets modules first
+    try:
+        from datasets import load_dataset, Audio
+    except ImportError as e:
+        print(f"❌ Error importing datasets: {e}")
+        print("Please install datasets: pip install datasets==3.6.0")
+        return
+    
     # Try to load from cache first
     dataset = None
     if not args.force_reprocess:
@@ -132,7 +139,6 @@ def main():
     
     if dataset is None:
         try:
-            from datasets import load_dataset, Audio
             dataset = load_dataset("facebook/voxpopuli", "it", split="train", trust_remote_code=True)
             print(f"✅ Dataset loaded successfully: {len(dataset)} samples")
             
@@ -432,7 +438,7 @@ def main():
     
     # Step 12: Start training
     print_step(12, "Starting Training")
-    if not ask_user_confirmation("Start training now?"):
+    if ask_user_confirmation("Start training now?") == False:
         print("Training cancelled by user.")
         return
     
