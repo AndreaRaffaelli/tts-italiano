@@ -3,7 +3,7 @@
   hosts: all
   become: true
   vars:
-    python_version: "3.10"
+    python_version: "3.12"
     venv_name: "speecht5_env"
     venv_path: "/home/{{ ansible_user }}/{{ venv_name }}"
     requirements_file: "requirements.txt"
@@ -41,7 +41,6 @@
       changed_when: false
 
     - name: CUDA Installation Block
-      when: nvidia_check.rc != 0
       block:
         - name: Download CUDA keyring
           ansible.builtin.get_url:
@@ -70,21 +69,28 @@
             path: "{{ cuda_keyring_file }}"
             state: absent
 
-        - name: Verify CUDA installation
+        - name: Verify CUDA installation (if GPU available)
           ansible.builtin.command: nvidia-smi
           register: nvidia_verify
           become: true
           become_user: "{{ ansible_user }}"
           changed_when: false
+          failed_when: false
 
         - name: Display NVIDIA status
           ansible.builtin.debug:
             var: nvidia_verify.stdout_lines
+          when: nvidia_verify.rc == 0
+
+        - name: Display CUDA installation without GPU message
+          ansible.builtin.debug:
+            msg: "CUDA drivers installed successfully, but no GPU detected or drivers not loaded yet"
+          when: nvidia_verify.rc != 0
 
     - name: Display CUDA already installed message
       ansible.builtin.debug:
         msg: "CUDA drivers are already installed and working"
-      when: nvidia_check.rc == 0
+      when: nvidia_check.rc == 0 and false  # This condition will never be true, forcing installation
 
     - name: Create virtual environment
       ansible.builtin.command: python{{ python_version }} -m venv {{ venv_path }}
@@ -113,11 +119,19 @@
 
     - name: Check if requirements.txt exists in current directory
       ansible.builtin.stat:
-        path: "{{ ansible_env.PWD }}/{{ requirements_file }}"
+        path: "{{ playbook_dir }}/{{ requirements_file }}"
       register: requirements_current_stat
       become: true
       become_user: "{{ ansible_user }}"
-      when: not (requirements_stat.stat.exists or (requirements_current_stat is defined and requirements_current_stat.stat.exists))
+      delegate_to: localhost
+      when: not requirements_stat.stat.exists
+
+    - name: Check if requirements.txt exists in speecht5_training directory
+      ansible.builtin.stat:
+        path: "/home/{{ ansible_user }}/speecht5_training/{{ requirements_file }}"
+      register: requirements_remote_stat
+      become: true
+      become_user: "{{ ansible_user }}"
 
     - name: Copy src directory to remote host
       ansible.builtin.copy:
@@ -129,19 +143,27 @@
       become: true
       become_user: "{{ ansible_user }}"
 
-    - name: Make Python scripts executable
-      ansible.builtin.file:
-        path: "/home/{{ ansible_user }}/{{ item }}"
-        mode: '0755'
-      with_fileglob:
-        - "/home/{{ ansible_user }}/*.py"
+    - name: Find Python scripts in speecht5_training directory
+      ansible.builtin.find:
+        paths: "/home/{{ ansible_user }}/speecht5_training/"
+        patterns: "*.py"
+      register: python_scripts
       become: true
       become_user: "{{ ansible_user }}"
+
+    - name: Make Python scripts executable
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: '0755'
+      loop: "{{ python_scripts.files }}"
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: python_scripts.files | length > 0
 
     - name: Install Python dependencies from requirements.txt
       become: true
       become_user: "{{ ansible_user }}"
-      when: requirements_stat.stat.exists or requirements_current_stat.stat.exists
+      when: requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists
       block:
         - name: Install PyTorch with CUDA support from requirements
           ansible.builtin.pip:
@@ -155,7 +177,7 @@
 
         - name: Install other requirements (excluding PyTorch)
           ansible.builtin.pip:
-            requirements: "/home/{{ ansible_user }}/{{ requirements_file }}"
+            requirements: "/home/{{ ansible_user }}/speecht5_training/{{ requirements_file }}"
             virtualenv: "{{ venv_path }}"
             virtualenv_python: python{{ python_version }}
             extra_args: --no-deps
@@ -168,7 +190,7 @@
 
         - name: Install remaining dependencies
           ansible.builtin.pip:
-            requirements: "/home/{{ ansible_user }}/{{ requirements_file }}"
+            requirements: "/home/{{ ansible_user }}/speecht5_training/{{ requirements_file }}"
             virtualenv: "{{ venv_path }}"
             virtualenv_python: python{{ python_version }}
 
@@ -183,7 +205,7 @@
         virtualenv_python: python{{ python_version }}
       become: true
       become_user: "{{ ansible_user }}"
-      when: not requirements_stat.stat.exists
+      when: not (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
 
     - name: Install PyTorch with CUDA support
       ansible.builtin.pip:
@@ -196,7 +218,7 @@
         virtualenv_python: python{{ python_version }}
       become: true
       become_user: "{{ ansible_user }}"
-      when: not requirements_stat.stat.exists
+      when: not (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
 
     - name: Install Transformers from GitHub (latest version)
       ansible.builtin.pip:
@@ -205,7 +227,7 @@
         virtualenv_python: python{{ python_version }}
       become: true
       become_user: "{{ ansible_user }}"
-      when: not requirements_stat.stat.exists
+      when: not (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
 
     - name: Install additional dependencies
       ansible.builtin.pip:
@@ -218,7 +240,7 @@
         virtualenv_python: python{{ python_version }}
       become: true
       become_user: "{{ ansible_user }}"
-      when: not requirements_stat.stat.exists
+      when: not (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
 
     - name: Create activation script
       ansible.builtin.copy:

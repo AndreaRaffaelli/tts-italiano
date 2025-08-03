@@ -1,5 +1,5 @@
 gpu_servers:
   hosts:
-    192.168.121.240:
-      ansible_user: ubuntu
+    35.232.181.5:
+      ansible_user: andrea
       ansible_ssh_private_key_file: ~/.ssh/tts-prova
