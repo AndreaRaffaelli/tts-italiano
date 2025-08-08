@@ -18,3 +18,24 @@ python train_speecht5.py --force-reprocess # Ignores cache, reprocesses everythi
 ``` python
 python train_speecht5.py --clear-cache # Deletes cache files
 ```
+
+## Enanched version
+
+La prima dava risultati un po' grezzi. Riproviamo:
+### Training normale con conferme
+python enhanced_tts_training.py
+
+### Training automatico senza conferme
+python enhanced_tts_training.py --yes
+
+### Forza riprocessing (ignora cache)
+python enhanced_tts_training.py --force-reprocess --yes
+
+### Pulisci cache
+python enhanced_tts_training.py --clear-cache
+
+### Training con parametri custom
+python enhanced_tts_training.py --yes --max-steps 15000 --output-dir "my_italian_tts" --push-to-hub
+
+### Usa directory cache custom
+python enhanced_tts_training.py --cache-dir "/mnt/fast_ssd/cache" --yes
