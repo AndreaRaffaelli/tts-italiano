@@ -176,31 +176,27 @@ def load_multiple_italian_datasets(cache_paths, force_reprocess=False):
     
     datasets = []
     
-    # 1. VoxPopuli (il tuo originale, ma limitato)
-    try:
-        print("📂 Loading VoxPopuli...")
-        vox = load_dataset("facebook/voxpopuli", "it", split="train[:50000]", trust_remote_code=True)
-        if "normalized_text" in vox.column_names:
-            vox = vox.rename_column("normalized_text", "text")
-        datasets.append(vox)
-        print(f"✅ VoxPopuli loaded: {len(vox)} samples")
-    except Exception as e:
-        print(f"⚠️ VoxPopuli not available: {e}")
-    
-    # 2. Mozilla Common Voice (migliore per intonazioni naturali)
-    try:
-        print("📂 Loading Mozilla Common Voice...")
-        cv = load_dataset("mozilla-foundation/common_voice_11_0", "it", split="train[:30000]", trust_remote_code=True)
-        cv = cv.rename_column("sentence", "text")
-        # Rimuovi colonne non necessarie
-        keep_columns = ["audio", "text"]
-        remove_columns = [col for col in cv.column_names if col not in keep_columns]
-        cv = cv.remove_columns(remove_columns)
-        datasets.append(cv)
-        print(f"✅ Common Voice loaded: {len(cv)} samples")
-    except Exception as e:
-        print(f"⚠️ Common Voice not available: {e}")
-    
+
+    target_sampling_rate = 16000  # pick one rate for all datasets
+
+    print("📂 Loading VoxPopuli...")
+    vox = load_dataset("facebook/voxpopuli", "it", split="train[:50000]", trust_remote_code=True)
+    if "normalized_text" in vox.column_names:
+        vox = vox.rename_column("normalized_text", "text")
+    datasets.append(vox)
+
+    print("📂 Loading Mozilla Common Voice...")
+    cv = load_dataset("mozilla-foundation/common_voice_11_0", "it", split="train[:30000]", trust_remote_code=True)
+    cv = cv.rename_column("sentence", "text")
+    keep_columns = ["audio", "text"]
+    remove_columns = [col for col in cv.column_names if col not in keep_columns]
+    cv = cv.remove_columns(remove_columns)
+    cv = cv.cast_column("audio", Audio(sampling_rate=target_sampling_rate))
+    datasets.append(cv)
+
+    # Now they should match
+    combined = concatenate_datasets(datasets)
+
     # 3. Combina datasets
     if datasets:
         combined = concatenate_datasets(datasets)
@@ -333,68 +329,136 @@ def enhanced_training_pipeline(args):
         savedir="/tmp/speaker_model"
     )
     
-    # Step 6: Dataset preprocessing
-    print_step(6, "Dataset Preprocessing (Audio + Speaker Embeddings)")
-    
-    def prepare_sample(example):
-        try:
-            audio = example["audio"]
-            waveform = torch.tensor(audio["array"])
-            
-            # Preprocessing migliorato
-            waveform = enhanced_audio_preprocessing(waveform)
-            
-            if len(waveform) < 8000:  # Skip se troppo corto (0.5s)
-                return None
-            
-            # Processa con SpeechT5
-            processed = processor(
-                text=example["text"],
-                audio_target=waveform.numpy(),
-                sampling_rate=16000,
-                return_attention_mask=False,
-            )
-            
-            if len(processed["input_ids"]) > 250:  # Skip se troppo lungo
-                return None
-            
-            processed["labels"] = processed["labels"][0]
-            
-            # Speaker embeddings
-            with torch.no_grad():
-                speaker_emb = speaker_model.encode_batch(waveform.unsqueeze(0))
-                speaker_emb = torch.nn.functional.normalize(speaker_emb, dim=2)
-                processed["speaker_embeddings"] = speaker_emb.squeeze().cpu().numpy()
-            
-            return processed
-            
-        except Exception as e:
-            print(f"⚠️ Error processing example: {e}")
-            return None
-    
-    # Prova a caricare da cache
+    # ---------- Step 6 (Two-phase CPU+GPU preprocessing) ----------
+print_step(6, "Dataset Preprocessing (Audio + Speaker Embeddings)")
+
+# PHASE A: CPU-only preprocessing (parallel)
+def _cpu_prepare(example):
+    """CPU-only: convert audio->waveform, light preprocessing, filter by length.
+       Return a dict with 'text' and 'waveform' (numpy float32) or empty waveform to drop later.
+    """
+    try:
+        audio = example["audio"]
+        waveform = torch.tensor(audio["array"], dtype=torch.float32)
+
+        # Your existing CPU-only preprocessing function (must NOT use CUDA)
+        waveform = enhanced_audio_preprocessing(waveform)
+
+        # Drop too-short files
+        if waveform.numel() < 8000:  # < 0.5s at 16k
+            return {"text": example.get("text", ""), "waveform": []}
+
+        return {"text": example.get("text", ""), "waveform": waveform.numpy().astype("float32")}
+    except Exception as e:
+        # keep consistent return shape to avoid pickling problems
+        print(f"⚠️ CPU preprocess error: {e}")
+        return {"text": example.get("text", ""), "waveform": []}
+
+
+# PHASE B: GPU finalization (single process, safe to use CUDA)
+def _gpu_finalize(example):
+    """Single-process GPU work: tokenization via processor + speaker embeddings."""
+    try:
+        # If waveform was flagged empty, propagate empty to be filtered out
+        if not example.get("waveform"):
+            return {"drop": True}
+
+        # Convert numpy -> torch
+        waveform = torch.tensor(example["waveform"], dtype=torch.float32)
+
+        # Processor: convert audio -> model input (this may allocate on CPU; fine)
+        processed = processor(
+            text=example.get("text", ""),
+            audio_target=waveform.numpy(),
+            sampling_rate=16000,
+            return_attention_mask=False,
+        )
+
+        # length check
+        if len(processed["input_ids"]) > 250:
+            return {"drop": True}
+
+        # fix labels shape if needed
+        processed["labels"] = processed["labels"][0]
+
+        # Speaker embeddings: use GPU safely (this function runs on main process)
+        with torch.no_grad():
+            # Ensure speaker_model is on the right device
+            device = next(speaker_model.parameters()).device
+            waveform = waveform.to(device)
+            speaker_emb = speaker_model.encode_batch(waveform.unsqueeze(0))
+            speaker_emb = torch.nn.functional.normalize(speaker_emb, dim=2)
+
+        processed["speaker_embeddings"] = speaker_emb.squeeze().cpu().numpy()
+
+        # processed now contains input_ids, labels, speaker_embeddings, etc.
+        return processed
+
+    except Exception as e:
+        print(f"⚠️ GPU finalize error: {e}")
+        return {"drop": True}
+
+
+    # Try loading processed cache first
     processed_dataset = None
     if not args.force_reprocess:
         processed_dataset = load_cache(cache_paths['processed_dataset'], "processed dataset")
-    
+
     if processed_dataset is None:
-        print("🔄 Processing dataset (this may take a while)...")
-        processed_dataset = dataset.map(
-            prepare_sample, 
+        print("🔄 Phase A — CPU preprocessing (parallel)...")
+        # Phase A: run CPU-only preprocessing in parallel
+        cpu_num_proc = min(4, os.cpu_count() or 1)  # tune as you like
+        cpu_columns_to_remove = [c for c in dataset.column_names if c not in ("audio", "text")]
+
+        # Keep 'text' and create 'waveform' column
+        dataset_cpu = dataset.map(
+            _cpu_prepare,
             remove_columns=dataset.column_names,
-            num_proc=min(4, os.cpu_count()),  # Parallelizza
-            desc="Processing audio"
+            num_proc=cpu_num_proc,
+            desc="CPU audio preprocessing",
         )
-        
-        # Rimuovi campioni None
-        processed_dataset = processed_dataset.filter(lambda x: x is not None)
-        
-        # Salva in cache
+
+        # Filter out entries with empty waveform
+        dataset_cpu = dataset_cpu.filter(lambda x: len(x["waveform"]) > 0, num_proc=1)
+
+        print(f"✅ Phase A complete: {len(dataset_cpu)} samples after CPU filtering")
+
+        # Phase B: GPU single-process pass
+        print("🔄 Phase B — GPU processing (single process) ...")
+        # Make sure models are on GPU before calling the single-process map
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        speaker_model.to(device)
+        speaker_model.eval()
+        # processor typically is CPU-side but fine to have it in scope
+
+        # Run finalize with num_proc=1 (no forking -> safe CUDA)
+        processed_dataset = dataset_cpu.map(
+            _gpu_finalize,
+            num_proc=1,
+            desc="GPU finalize: tokens + speaker embeddings",
+        )
+
+        # Filter out any entries flagged as drop
+        def _keep(x):
+            # If drop key exists or processed fields missing, remove
+            if x.get("drop", False):
+                return False
+            # Basic sanity check for speaker_embeddings presence
+            return ("speaker_embeddings" in x) and (len(x["speaker_embeddings"]) > 0)
+
+        processed_dataset = processed_dataset.filter(_keep, num_proc=1)
+
+        # Optionally remove intermediate waveform column if present
+        if "waveform" in processed_dataset.column_names:
+            processed_dataset = processed_dataset.remove_columns(["waveform"])
+
+        # Save cache
         save_cache(processed_dataset, cache_paths['processed_dataset'], "processed dataset")
         print(f"✅ Processed dataset: {len(processed_dataset)} samples")
     else:
         print(f"✅ Using cached processed dataset: {len(processed_dataset)} samples")
-    
+    # ---------- End Step 6 ----------
+
     # Step 7: Final filtering
     print_step(7, "Final Length Filtering")
     
