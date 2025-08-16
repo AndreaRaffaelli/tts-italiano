@@ -1,5 +1,5 @@
 # `main.tf`
-# `main.tf` - L4 GPU Instance Configuration
+# `main.tf` - L4 GPU Instance Configuration with Cache Disk
 # Configurazione del provider Google
 terraform {
   required_providers {
@@ -24,11 +24,37 @@ provider "google-beta" {
   region  = var.region
 }
 
+# Disco aggiuntivo per cache (se abilitato)
+resource "google_compute_disk" "cache_disk" {
+  count = var.enable_cache_disk ? 1 : 0
+  
+  name  = var.cache_disk_name
+  type  = var.cache_disk_type
+  zone  = var.zone
+  size  = var.cache_disk_size
+  
+  labels = {
+    environment = var.environment
+    purpose     = "cache"
+    instance    = var.gpu_instance_name
+  }
+}
+
 # Risorsa per la creazione dell'istanza GPU L4
 resource "google_compute_instance" "gpu_l4_instance" {
   name         = var.gpu_instance_name
   machine_type = var.machine_type
   zone         = var.zone
+
+  # Disco aggiuntivo per cache (opzionale)
+  dynamic "attached_disk" {
+    for_each = var.enable_cache_disk ? [1] : []
+    content {
+      device_name = var.cache_disk_name
+      mode        = "READ_WRITE"
+      source      = google_compute_disk.cache_disk[0].self_link
+    }
+  }
 
   boot_disk {
     auto_delete = true
@@ -87,7 +113,7 @@ resource "google_compute_instance" "gpu_l4_instance" {
       "https://www.googleapis.com/auth/trace.append"
     ]
   }
-
+  
   # Metadati per SSH e configurazioni
   metadata = {
     ssh-keys        = var.ssh_public_key_path != "" ? "${var.ssh_user}:${file(var.ssh_public_key_path)}" : null
@@ -151,4 +177,16 @@ output "gpu_instance_name" {
 output "gpu_instance_self_link" {
   value       = google_compute_instance.gpu_l4_instance.self_link
   description = "The self link of the GPU L4 instance"
+}
+
+# Output per disco cache (se abilitato)
+output "cache_disk_name" {
+  value       = var.enable_cache_disk ? google_compute_disk.cache_disk[0].name : null
+  description = "The name of the cache disk (if enabled)"
+}
+
+# Output per disco cache self link (se abilitato)
+output "cache_disk_self_link" {
+  value       = var.enable_cache_disk ? google_compute_disk.cache_disk[0].self_link : null
+  description = "The self link of the cache disk (if enabled)"
 }

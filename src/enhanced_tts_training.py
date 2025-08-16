@@ -330,73 +330,73 @@ def enhanced_training_pipeline(args):
     )
     
     # ---------- Step 6 (Two-phase CPU+GPU preprocessing) ----------
-print_step(6, "Dataset Preprocessing (Audio + Speaker Embeddings)")
+    print_step(6, "Dataset Preprocessing (Audio + Speaker Embeddings)")
 
-# PHASE A: CPU-only preprocessing (parallel)
-def _cpu_prepare(example):
-    """CPU-only: convert audio->waveform, light preprocessing, filter by length.
-       Return a dict with 'text' and 'waveform' (numpy float32) or empty waveform to drop later.
-    """
-    try:
-        audio = example["audio"]
-        waveform = torch.tensor(audio["array"], dtype=torch.float32)
+    # PHASE A: CPU-only preprocessing (parallel)
+    def _cpu_prepare(example):
+        """CPU-only: convert audio->waveform, light preprocessing, filter by length.
+        Return a dict with 'text' and 'waveform' (numpy float32) or empty waveform to drop later.
+        """
+        try:
+            audio = example["audio"]
+            waveform = torch.tensor(audio["array"], dtype=torch.float32)
 
-        # Your existing CPU-only preprocessing function (must NOT use CUDA)
-        waveform = enhanced_audio_preprocessing(waveform)
+            # Your existing CPU-only preprocessing function (must NOT use CUDA)
+            waveform = enhanced_audio_preprocessing(waveform)
 
-        # Drop too-short files
-        if waveform.numel() < 8000:  # < 0.5s at 16k
+            # Drop too-short files
+            if waveform.numel() < 8000:  # < 0.5s at 16k
+                return {"text": example.get("text", ""), "waveform": []}
+
+            return {"text": example.get("text", ""), "waveform": waveform.numpy().astype("float32")}
+        except Exception as e:
+            # keep consistent return shape to avoid pickling problems
+            print(f"⚠️ CPU preprocess error: {e}")
             return {"text": example.get("text", ""), "waveform": []}
 
-        return {"text": example.get("text", ""), "waveform": waveform.numpy().astype("float32")}
-    except Exception as e:
-        # keep consistent return shape to avoid pickling problems
-        print(f"⚠️ CPU preprocess error: {e}")
-        return {"text": example.get("text", ""), "waveform": []}
 
+    # PHASE B: GPU finalization (single process, safe to use CUDA)
+    def _gpu_finalize(example):
+        """Single-process GPU work: tokenization via processor + speaker embeddings."""
+        try:
+            # If waveform was flagged empty, propagate empty to be filtered out
+            if not example.get("waveform"):
+                return {"drop": True}
 
-# PHASE B: GPU finalization (single process, safe to use CUDA)
-def _gpu_finalize(example):
-    """Single-process GPU work: tokenization via processor + speaker embeddings."""
-    try:
-        # If waveform was flagged empty, propagate empty to be filtered out
-        if not example.get("waveform"):
+            # Convert numpy -> torch
+            waveform = torch.tensor(example["waveform"], dtype=torch.float32)
+
+            # Processor: convert audio -> model input (this may allocate on CPU; fine)
+            processed = processor(
+                text=example.get("text", ""),
+                audio_target=waveform.numpy(),
+                sampling_rate=16000,
+                return_attention_mask=False,
+            )
+
+            # length check
+            if len(processed["input_ids"]) > 250:
+                return {"drop": True}
+
+            # fix labels shape if needed
+            processed["labels"] = processed["labels"][0]
+
+            # Speaker embeddings: use GPU safely (this function runs on main process)
+            with torch.no_grad():
+                # Ensure speaker_model is on the right device
+                device = next(speaker_model.parameters()).device
+                waveform = waveform.to(device)
+                speaker_emb = speaker_model.encode_batch(waveform.unsqueeze(0))
+                speaker_emb = torch.nn.functional.normalize(speaker_emb, dim=2)
+
+            processed["speaker_embeddings"] = speaker_emb.squeeze().cpu().numpy()
+
+            # processed now contains input_ids, labels, speaker_embeddings, etc.
+            return processed
+
+        except Exception as e:
+            print(f"⚠️ GPU finalize error: {e}")
             return {"drop": True}
-
-        # Convert numpy -> torch
-        waveform = torch.tensor(example["waveform"], dtype=torch.float32)
-
-        # Processor: convert audio -> model input (this may allocate on CPU; fine)
-        processed = processor(
-            text=example.get("text", ""),
-            audio_target=waveform.numpy(),
-            sampling_rate=16000,
-            return_attention_mask=False,
-        )
-
-        # length check
-        if len(processed["input_ids"]) > 250:
-            return {"drop": True}
-
-        # fix labels shape if needed
-        processed["labels"] = processed["labels"][0]
-
-        # Speaker embeddings: use GPU safely (this function runs on main process)
-        with torch.no_grad():
-            # Ensure speaker_model is on the right device
-            device = next(speaker_model.parameters()).device
-            waveform = waveform.to(device)
-            speaker_emb = speaker_model.encode_batch(waveform.unsqueeze(0))
-            speaker_emb = torch.nn.functional.normalize(speaker_emb, dim=2)
-
-        processed["speaker_embeddings"] = speaker_emb.squeeze().cpu().numpy()
-
-        # processed now contains input_ids, labels, speaker_embeddings, etc.
-        return processed
-
-    except Exception as e:
-        print(f"⚠️ GPU finalize error: {e}")
-        return {"drop": True}
 
 
     # Try loading processed cache first
@@ -650,6 +650,7 @@ def main():
         sys.exit(0)
     
     # Run training pipeline
+    torch.set_num_threads(1)
     enhanced_training_pipeline(args)
 
 if __name__ == "__main__":

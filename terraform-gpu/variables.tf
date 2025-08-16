@@ -22,7 +22,7 @@ variable "zone" {
 variable "gpu_instance_name" {
   description = "Nome dell'istanza GPU L4"
   type        = string
-  default     = "instance-20250802-231725"
+  default     = "gpu-training"
 }
 
 variable "machine_type" {
@@ -50,7 +50,7 @@ variable "boot_image" {
 variable "boot_disk_size" {
   description = "Dimensione del boot disk in GB"
   type        = number
-  default     = 300
+  default     = 100
 }
 
 variable "boot_disk_type" {
@@ -62,6 +62,38 @@ variable "boot_disk_type" {
     error_message = "Il tipo di disco deve essere pd-standard, pd-ssd, o pd-balanced."
   }
 }
+
+# Variabili disco cache
+variable "enable_cache_disk" {
+  description = "Whether to create and attach a cache disk"
+  type        = bool
+  default     = true
+}
+
+variable "cache_disk_name" {
+  description = "Name of the cache disk"
+  type        = string
+  default     = "disk-cache"
+}
+
+variable "cache_disk_size" {
+  description = "Cache disk size in GB"
+  type        = number
+  default     = 200
+}
+
+variable "cache_disk_type" {
+  description = "Cache disk type"
+  type        = string
+  default     = "pd-balanced"
+}
+
+variable "cache_disk_mount_point" {
+  description = "Mount point for the cache disk"
+  type        = string
+  default     = "/mnt/cache"
+}
+
 
 variable "preemptible" {
   description = "Se l'istanza deve essere preemptible (più economica ma può essere terminata)"

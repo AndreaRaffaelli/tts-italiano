@@ -135,7 +135,7 @@
 
     - name: Copy src directory to remote host
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../src/"
+        src: "{{ playbook_dir }}/../../src/"
         dest: "/home/{{ ansible_user }}/speecht5_training/"
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"

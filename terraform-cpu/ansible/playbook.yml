@@ -1,0 +1,432 @@
+---
+- name: Setup Python Environment for SpeechT5 Data Preprocessing
+  hosts: all
+  become: true
+  vars:
+    python_version: "3.12"
+    venv_name: "speecht5_preprocess_env"
+    venv_path: "/home/{{ ansible_user }}/{{ venv_name }}"
+    requirements_file: "requirements.txt"
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install required system packages
+      ansible.builtin.apt:
+        name:
+          - wget
+          - git
+          - curl
+          - python{{ python_version }}
+          - python{{ python_version }}-venv
+          - python{{ python_version }}-dev
+          - python3-pip
+          - build-essential
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - lsb-release
+          - ffmpeg  # For audio processing
+          - sox     # For audio manipulation
+          - libsox-fmt-all  # Additional audio format support
+          - libsndfile1     # For soundfile library
+        state: present
+
+    - name: Display CPU-only setup message
+      ansible.builtin.debug:
+        msg: |
+          🖥️  Setting up CPU-only environment for data preprocessing
+          📊 This instance will handle data preparation and preprocessing tasks
+          🚫 CUDA installation skipped (CPU-only setup)
+
+    - name: Create virtual environment
+      ansible.builtin.command: python{{ python_version }} -m venv {{ venv_path }}
+      args:
+        creates: "{{ venv_path }}/bin/activate"
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Upgrade pip in virtual environment
+      ansible.builtin.pip:
+        name: pip
+        state: present
+        version: latest
+        virtualenv: "{{ venv_path }}"
+        virtualenv_python: python{{ python_version }}
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Check if requirements.txt exists in src directory
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../src/{{ requirements_file }}"
+      register: requirements_stat
+      become: true
+      become_user: "{{ ansible_user }}"
+      delegate_to: localhost
+
+    - name: Check if requirements.txt exists in current directory
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/{{ requirements_file }}"
+      register: requirements_current_stat
+      become: true
+      become_user: "{{ ansible_user }}"
+      delegate_to: localhost
+      when: not requirements_stat.stat.exists
+
+    - name: Check if requirements.txt exists in speecht5_preprocessing directory
+      ansible.builtin.stat:
+        path: "/home/{{ ansible_user }}/speecht5_preprocessing/{{ requirements_file }}"
+      register: requirements_remote_stat
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Copy src directory to remote host
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../src/"
+        dest: "/home/{{ ansible_user }}/speecht5_preprocessing/"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Find Python scripts in speecht5_preprocessing directory
+      ansible.builtin.find:
+        paths: "/home/{{ ansible_user }}/speecht5_preprocessing/"
+        patterns: "*.py"
+      register: python_scripts
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Make Python scripts executable
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: '0755'
+      loop: "{{ python_scripts.files }}"
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: python_scripts.files | length > 0
+
+    - name: Install Python dependencies from requirements.txt
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists
+      block:
+        - name: Install PyTorch CPU version from requirements
+          ansible.builtin.pip:
+            name:
+              - torch
+              - torchvision
+              - torchaudio
+            extra_args: --index-url https://download.pytorch.org/whl/cpu
+            virtualenv: "{{ venv_path }}"
+            virtualenv_python: python{{ python_version }}
+
+        - name: Install other requirements (excluding PyTorch)
+          ansible.builtin.pip:
+            requirements: "/home/{{ ansible_user }}/speecht5_preprocessing/{{ requirements_file }}"
+            virtualenv: "{{ venv_path }}"
+            virtualenv_python: python{{ python_version }}
+            extra_args: --no-deps
+
+        - name: Install transformers from GitHub
+          ansible.builtin.pip:
+            name: git+https://github.com/huggingface/transformers.git
+            virtualenv: "{{ venv_path }}"
+            virtualenv_python: python{{ python_version }}
+
+        - name: Install remaining dependencies
+          ansible.builtin.pip:
+            requirements: "/home/{{ ansible_user }}/speecht5_preprocessing/{{ requirements_file }}"
+            virtualenv: "{{ venv_path }}"
+            virtualenv_python: python{{ python_version }}
+
+    - name: Install default Python dependencies for preprocessing (if no requirements.txt)
+      ansible.builtin.pip:
+        name:
+          - datasets==3.6.0
+          - soundfile
+          - speechbrain
+          - accelerate
+          - librosa
+          - scipy
+          - numpy
+          - pandas
+          - tqdm
+          - matplotlib
+          - seaborn
+        virtualenv: "{{ venv_path }}"
+        virtualenv_python: python{{ python_version }}
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: not (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
+
+    - name: Install PyTorch CPU version (if no requirements.txt)
+      ansible.builtin.pip:
+        name:
+          - torch
+          - torchvision
+          - torchaudio
+        extra_args: --index-url https://download.pytorch.org/whl/cpu
+        virtualenv: "{{ venv_path }}"
+        virtualenv_python: python{{ python_version }}
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: not (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
+
+    - name: Install Transformers from GitHub (latest version)
+      ansible.builtin.pip:
+        name: git+https://github.com/huggingface/transformers.git
+        virtualenv: "{{ venv_path }}"
+        virtualenv_python: python{{ python_version }}
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: not (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
+
+    - name: Install additional preprocessing dependencies
+      ansible.builtin.pip:
+        name:
+          - pillow
+          - joblib
+          - scikit-learn
+        virtualenv: "{{ venv_path }}"
+        virtualenv_python: python{{ python_version }}
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: not (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
+
+    - name: Create activation script for preprocessing
+      ansible.builtin.copy:
+        dest: "/home/{{ ansible_user }}/activate_speecht5_preprocess.sh"
+        content: |
+          #!/bin/bash
+          echo "📊 Activating SpeechT5 Preprocessing Environment"
+          echo "==============================================="
+          source {{ venv_path }}/bin/activate
+          echo "✅ Virtual environment activated: {{ venv_name }}"
+          echo "🐍 Python version: $(python --version)"
+          echo "🔥 PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
+          echo "🖥️  Device: $(python -c 'import torch; print(\"CPU only\" if not torch.cuda.is_available() else \"GPU available\")')"
+          echo "📈 Available CPU cores: $(python -c 'import multiprocessing; print(multiprocessing.cpu_count())')"
+          echo "💾 Available memory: $(free -h | grep Mem | awk '{print $2}')"
+          echo ""
+          echo "💡 To run your preprocessing scripts:"
+          echo "   cd ~/speecht5_preprocessing"
+          echo "   python preprocess_data.py"
+          echo ""
+          echo "📁 Data processing tools available:"
+          echo "   - datasets: Data loading and processing"
+          echo "   - soundfile: Audio file I/O"
+          echo "   - librosa: Audio analysis"
+          echo "   - scipy: Scientific computing"
+          echo ""
+          exec "$SHELL"
+        mode: '0755'
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Check if local Hugging Face token exists
+      ansible.builtin.stat:
+        path: "~/.cache/huggingface/token"
+      register: local_hf_token
+      delegate_to: localhost
+      become: false
+
+    - name: Create .cache/huggingface directory on remote
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.cache/huggingface"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Copy Hugging Face token to remote host
+      ansible.builtin.copy:
+        src: "~/.cache/huggingface/token"
+        dest: "/home/{{ ansible_user }}/.cache/huggingface/token"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: local_hf_token.stat.exists
+
+    - name: Check if local Hugging Face stored_tokens exists
+      ansible.builtin.stat:
+        path: "~/.cache/huggingface/stored_tokens"
+      register: local_hf_stored_tokens
+      delegate_to: localhost
+      become: false
+
+    - name: Copy Hugging Face stored_tokens to remote host (if exists)
+      ansible.builtin.copy:
+        src: "~/.cache/huggingface/stored_tokens"
+        dest: "/home/{{ ansible_user }}/.cache/huggingface/stored_tokens"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: local_hf_token.stat.exists and local_hf_stored_tokens.stat.exists
+
+    - name: Verify Hugging Face authentication
+      ansible.builtin.command: "{{ venv_path }}/bin/python -c 'from huggingface_hub import whoami; print(whoami())'"
+      register: hf_auth_check
+      become: true
+      become_user: "{{ ansible_user }}"
+      when: local_hf_token.stat.exists
+      failed_when: false
+      changed_when: false
+
+    - name: Display Hugging Face authentication status
+      ansible.builtin.debug:
+        msg: |
+          🤗 Hugging Face Authentication Status:
+          {% if local_hf_token.stat.exists %}
+          ✅ Token copied from local host
+          {% if hf_auth_check.rc == 0 %}
+          ✅ Authentication verified: {{ hf_auth_check.stdout }}
+          {% else %}
+          ⚠️  Authentication check failed. You may need to login manually with: hf auth login
+          {% endif %}
+          {% else %}
+          ⚠️  No local token found. Please run 'hf auth login' on the remote host after setup.
+          {% endif %}
+
+    - name: Create data processing directories
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      become: true
+      become_user: "{{ ansible_user }}"
+      loop:
+        - "data/raw"
+        - "data/processed"
+        - "data/cache"
+        - "outputs"
+        - "logs"
+
+    - name: Add virtual environment activation to .bashrc
+      ansible.builtin.lineinfile:
+        path: "/home/{{ ansible_user }}/.bashrc"
+        line: "alias speecht5pp='source {{ venv_path }}/bin/activate'"
+        create: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Create simple preprocessing test script
+      ansible.builtin.copy:
+        dest: "/home/{{ ansible_user }}/speecht5_preprocessing/test_setup.py"
+        content: |
+          #!/usr/bin/env python3
+          """
+          Test script to verify the preprocessing environment setup.
+          """
+          import sys
+          import torch
+          import transformers
+          import datasets
+          import soundfile
+          import numpy as np
+          from multiprocessing import cpu_count
+
+          def test_environment():
+              print("🧪 Testing SpeechT5 Preprocessing Environment")
+              print("=" * 50)
+              
+              # Python version
+              print(f"🐍 Python: {sys.version}")
+              
+              # PyTorch (CPU)
+              print(f"🔥 PyTorch: {torch.__version__}")
+              print(f"🖥️  Device: {'GPU available' if torch.cuda.is_available() else 'CPU only'}")
+              
+              # Key libraries
+              print(f"🤗 Transformers: {transformers.__version__}")
+              print(f"📊 Datasets: {datasets.__version__}")
+              
+              # System resources
+              print(f"⚙️  CPU cores: {cpu_count()}")
+              
+              # Test basic functionality
+              print("\n🔬 Testing basic functionality:")
+              
+              # Test tensor operations
+              x = torch.randn(100, 100)
+              y = torch.mm(x, x.T)
+              print(f"✅ PyTorch tensor operations: {y.shape}")
+              
+              # Test audio processing
+              try:
+                  import librosa
+                  print(f"✅ Librosa available: {librosa.__version__}")
+              except ImportError:
+                  print("⚠️  Librosa not available")
+              
+              # Test datasets
+              try:
+                  from datasets import load_dataset
+                  print("✅ Datasets loading capability: OK")
+              except Exception as e:
+                  print(f"⚠️  Datasets issue: {e}")
+              
+              print("\n✨ Environment test completed!")
+
+          if __name__ == "__main__":
+              test_environment()
+        mode: '0755'
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: |
+          🎉 CPU Preprocessing Environment Setup Completed!
+
+          📁 Virtual environment created at: {{ venv_path }}
+          📊 Environment type: CPU-only for data preprocessing
+
+          🚀 To activate the environment:
+             source {{ venv_path }}/bin/activate
+             # OR
+             ./activate_speecht5_preprocess.sh
+             # OR
+             speecht5pp  (alias added to .bashrc)
+
+          🔍 To test the setup:
+             cd ~/speecht5_preprocessing
+             python test_setup.py
+
+          🤗 Hugging Face Authentication:
+          {% if local_hf_token.stat.exists %}
+             ✅ Token copied from local host and configured
+          {% else %}
+             ⚠️  Please run: hf auth login (to authenticate with Hugging Face)
+          {% endif %}
+
+          📁 Project structure created:
+             ~/speecht5_preprocessing/  (processing scripts)
+             ~/data/raw/               (raw input data)
+             ~/data/processed/         (processed data output)
+             ~/data/cache/             (temporary processing cache)
+             ~/outputs/                (final outputs)
+             ~/logs/                   (processing logs)
+
+          💡 Key features for preprocessing:
+             🔹 PyTorch CPU version (optimized for preprocessing)
+             🔹 Audio processing libraries (soundfile, librosa)
+             🔹 Data manipulation tools (datasets, pandas, numpy)
+             🔹 Scientific computing (scipy, scikit-learn)
+             🔹 Visualization tools (matplotlib, seaborn)
+
+          🚀 Ready for SpeechT5 data preprocessing tasks!
