@@ -1,16 +1,48 @@
 ---
-- name: Setup Python Environment for SpeechT5 Data Preprocessing
+- name: Smart Setup - Auto-detect GPU and Configure Environment
   hosts: all
   become: true
   vars:
     python_version: "3.12"
-    venv_name: "speecht5_preprocess_env"
+    venv_name: "tts_venv"
     venv_path: "/home/{{ ansible_user }}/{{ venv_name }}"
     requirements_file: "requirements.txt"
 
+  pre_tasks:
+    - name: Install hardware detection tools
+      ansible.builtin.apt:
+        name:
+          - pciutils    # for lspci
+          - lshw        # for lshw
+          - util-linux  # for lscpu
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
   roles:
+    - project_structure
+    - hardware_detection
     - system_packages
+    - role: cuda
+      when: nvidia_gpu_present | default(false)
     - python_environment
     - speecht5_preprocessing
     - huggingface_auth
-    - project_structure
+  post_tasks:
+    - name: Display final environment summary
+      ansible.builtin.debug:
+        msg: |
+          🎉 Smart Setup Completed!
+          🔍 Hardware Configuration:
+          {% if nvidia_gpu_present %}
+          ✅ NVIDIA GPU detected and configured
+          🚀 Environment optimized for: Training & Preprocessing
+          🔥 PyTorch: CUDA-enabled version installed
+          {% else %}
+          🖥️  CPU-only configuration
+          📊 Environment optimized for: Data Preprocessing
+          🐍 PyTorch: CPU-optimized version installed
+          {% endif %}
+          📁 Virtual environment: {{ venv_path }}
+          🎯 Deployment type: {{ deployment_type }}
+          💡 Your environment is automatically optimized for your hardware!

@@ -1,0 +1,52 @@
+---
+- name: Check for NVIDIA GPU hardware using lspci
+  ansible.builtin.command: lspci -nn
+  register: lspci_output
+  changed_when: false
+  failed_when: false
+
+- name: Check for NVIDIA GPU hardware using lshw (alternative method)
+  ansible.builtin.command: lshw -c display -short
+  register: lshw_output
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Detect NVIDIA GPU presence
+  ansible.builtin.set_fact:
+    nvidia_gpu_present: >-
+      {{
+        (lspci_output.stdout | regex_search('NVIDIA|GeForce|Quadro|Tesla', ignorecase=True)) or
+        (lshw_output.stdout | regex_search('NVIDIA|GeForce|Quadro|Tesla', ignorecase=True))
+      }}
+
+- name: Display GPU detection results
+  ansible.builtin.debug:
+    msg: |
+      🔍 Hardware Detection Results:
+      {% if nvidia_gpu_present %}
+      ✅ NVIDIA GPU detected - CUDA installation will proceed
+      🎮 GPU Hardware Details:
+      {{ lspci_output.stdout_lines | select('regex', '.*NVIDIA.*|.*GeForce.*|.*Quadro.*|.*Tesla.*') | list | join('\n      ') }}
+      {% else %}
+      ⚠️  No NVIDIA GPU detected - Skipping CUDA installation
+      🖥️  Available display hardware:
+      {% if lshw_output.stdout_lines | length > 1 %}
+      {{ lshw_output.stdout_lines[1:] | join('\n      ') }}
+      {% else %}
+      No display hardware information available
+      {% endif %}
+      {% endif %}
+
+- name: Set Python environment type based on GPU presence
+  ansible.builtin.set_fact:
+    python_env_type: "{{ 'cuda' if nvidia_gpu_present else 'cpu' }}"
+    deployment_type: "{{ 'training' if nvidia_gpu_present else 'preprocessing' }}"
+
+- name: Display environment configuration
+  ansible.builtin.debug:
+    msg: |
+      ⚙️  Environment Configuration:
+      📊 Deployment type: {{ deployment_type }}
+      🐍 Python environment: {{ python_env_type }}
+      🔧 CUDA installation: {{ 'enabled' if nvidia_gpu_present else 'disabled' }}

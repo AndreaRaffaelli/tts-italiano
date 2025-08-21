@@ -1,70 +1,74 @@
 ---
-- name: Check if local Hugging Face token exists
+- name: Create virtual environment
+  ansible.builtin.command: python{{ python_version }} -m venv {{ venv_path }}
+  args:
+    creates: "{{ venv_path }}/bin/activate"
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Upgrade pip in virtual environment
+  ansible.builtin.pip:
+    name: pip
+    state: present
+    version: latest
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Check if requirements.txt exists in src directory
   ansible.builtin.stat:
-    path: "~/.cache/huggingface/token"
-  register: local_hf_token
+    path: "{{ playbook_dir }}/../src/{{ requirements_file }}"
+  register: requirements_stat
+  become: true
+  become_user: "{{ ansible_user }}"
   delegate_to: localhost
-  become: false
 
-- name: Create .cache/huggingface directory on remote
-  ansible.builtin.file:
-    path: "/home/{{ ansible_user }}/.cache/huggingface"
-    state: directory
-    owner: "{{ ansible_user }}"
-    group: "{{ ansible_user }}"
-    mode: '0755'
-  become: true
-  become_user: "{{ ansible_user }}"
-
-- name: Copy Hugging Face token to remote host
-  ansible.builtin.copy:
-    src: "~/.cache/huggingface/token"
-    dest: "/home/{{ ansible_user }}/.cache/huggingface/token"
-    owner: "{{ ansible_user }}"
-    group: "{{ ansible_user }}"
-    mode: '0600'
-  become: true
-  become_user: "{{ ansible_user }}"
-  when: local_hf_token.stat.exists
-
-- name: Check if local Hugging Face stored_tokens exists
+- name: Check if requirements.txt exists in current directory
   ansible.builtin.stat:
-    path: "~/.cache/huggingface/stored_tokens"
-  register: local_hf_stored_tokens
+    path: "{{ playbook_dir }}/{{ requirements_file }}"
+  register: requirements_current_stat
+  become: true
+  become_user: "{{ ansible_user }}"
   delegate_to: localhost
-  become: false
+  when: not requirements_stat.stat.exists
 
-- name: Copy Hugging Face stored_tokens to remote host (if exists)
-  ansible.builtin.copy:
-    src: "~/.cache/huggingface/stored_tokens"
-    dest: "/home/{{ ansible_user }}/.cache/huggingface/stored_tokens"
+- name: Check if requirements.txt exists in destination directory
+  ansible.builtin.stat:
+    path: "/home/{{ ansible_user }}/{{ destination_dir | default('speecht5_processing') }}/{{ requirements_file }}"
+  register: requirements_remote_stat
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Install Python dependencies with requirements.txt (CUDA)
+  ansible.builtin.include_tasks: install_with_requirements_cuda.yml
+  when:
+    - (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
+    - (python_env_type | default('cpu')) == 'cuda'
+
+- name: Install Python dependencies with requirements.txt (CPU)
+  ansible.builtin.include_tasks: install_with_requirements.yml
+  when:
+    - (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
+    - (python_env_type | default('cpu')) == 'cpu'
+
+- name: Install default Python dependencies (CUDA)
+  ansible.builtin.include_tasks: install_default_dependencies_cuda.yml
+  when:
+    - not (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
+    - (python_env_type | default('cpu')) == 'cuda'
+
+- name: Install default Python dependencies (CPU)
+  ansible.builtin.include_tasks: install_default_dependencies.yml
+  when:
+    - not (requirements_stat.stat.exists or requirements_current_stat.stat.exists or requirements_remote_stat.stat.exists)
+    - (python_env_type | default('cpu')) == 'cpu'
+
+- name: Add virtual environment activation to .bashrc
+  ansible.builtin.lineinfile:
+    path: "/home/{{ ansible_user }}/.bashrc"
+    line: "alias speecht5='source {{ venv_path }}/bin/activate'"
+    create: true
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
-    mode: '0600'
-  become: true
-  become_user: "{{ ansible_user }}"
-  when: local_hf_token.stat.exists and local_hf_stored_tokens.stat.exists
-
-- name: Verify Hugging Face authentication
-  ansible.builtin.command: "{{ venv_path }}/bin/python -c 'from huggingface_hub import whoami; print(whoami())'"
-  register: hf_auth_check
-  become: true
-  become_user: "{{ ansible_user }}"
-  when: local_hf_token.stat.exists
-  failed_when: false
-  changed_when: false
-
-- name: Display Hugging Face authentication status
-  ansible.builtin.debug:
-    msg: |
-      🤗 Hugging Face Authentication Status:
-      {% if local_hf_token.stat.exists %}
-      ✅ Token copied from local host
-      {% if hf_auth_check.rc == 0 %}
-      ✅ Authentication verified: {{ hf_auth_check.stdout }}
-      {% else %}
-      ⚠️  Authentication check failed. You may need to login manually with: hf auth login
-      {% endif %}
-      {% else %}
-      ⚠️  No local token found. Please run 'hf auth login' on the remote host after setup.
-      {% endif %}
+    mode: '0644'

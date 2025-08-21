@@ -1,0 +1,7 @@
+---
+# CUDA installation variables
+cuda_keyring_url: "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb"
+cuda_keyring_file: "/tmp/cuda-keyring_1.1-1_all.deb"
+
+# Force CUDA installation even if nvidia-smi works (useful for testing)
+cuda_force_install: false

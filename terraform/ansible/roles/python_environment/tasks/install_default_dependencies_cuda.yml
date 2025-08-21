@@ -1,0 +1,45 @@
+---
+# This file is for CUDA-enabled PyTorch installation (for training environments)
+- name: Install default Python dependencies for training
+  ansible.builtin.pip:
+    name:
+      - datasets==3.6.0
+      - soundfile
+      - speechbrain
+      - accelerate
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Install PyTorch with CUDA support
+  ansible.builtin.pip:
+    name:
+      - torch
+      - torchvision
+      - torchaudio
+    extra_args: --index-url https://download.pytorch.org/whl/cu118
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Install Transformers from GitHub (latest version)
+  ansible.builtin.pip:
+    name: git+https://github.com/huggingface/transformers.git
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Install additional training dependencies
+  ansible.builtin.pip:
+    name:
+      - matplotlib
+      - numpy
+      - tqdm
+      - pillow
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"

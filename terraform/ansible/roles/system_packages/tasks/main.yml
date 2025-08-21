@@ -1,0 +1,27 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install required system packages
+  ansible.builtin.apt:
+    name:
+      - wget
+      - git
+      - curl
+      - python{{ python_version }}
+      - python{{ python_version }}-venv
+      - python{{ python_version }}-dev
+      - python3-pip
+      - build-essential
+      - software-properties-common
+      - apt-transport-https
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - ffmpeg  # For audio processing
+      - sox     # For audio manipulation
+      - libsox-fmt-all  # Additional audio format support
+      - libsndfile1     # For soundfile library
+    state: present

@@ -1,0 +1,18 @@
+---
+- name: Check if CUDA drivers are already installed
+  ansible.builtin.command: nvidia-smi
+  register: nvidia_check
+  failed_when: false
+  changed_when: false
+
+- name: Display CUDA already installed message
+  ansible.builtin.debug:
+  when: nvidia_check.rc == 0
+
+- name: Install CUDA drivers
+  ansible.builtin.include_tasks: install_cuda.yml
+  when: nvidia_check.rc != 0
+
+- name: Verify CUDA installation
+  ansible.builtin.include_tasks: verify_cuda.yml
+  # msg: "✅ CUDA drivers are already installed and working"

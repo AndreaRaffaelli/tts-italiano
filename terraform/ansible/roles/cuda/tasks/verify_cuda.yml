@@ -1,0 +1,41 @@
+---
+- name: Verify CUDA installation (if GPU available)
+  ansible.builtin.command: nvidia-smi
+  register: nvidia_verify
+  become: true
+  become_user: "{{ ansible_user }}"
+  changed_when: false
+  failed_when: false
+
+- name: Display NVIDIA GPU information
+  ansible.builtin.debug:
+    msg: |
+      🎮 NVIDIA GPU Status:
+      {{ nvidia_verify.stdout }}
+  when: nvidia_verify.rc == 0
+
+- name: Display CUDA installation without GPU message
+  ansible.builtin.debug:
+    msg: |
+      🔧 CUDA drivers installed successfully, but no GPU detected or drivers not loaded yet.
+      This may be normal if:
+      - System hasn't been rebooted since driver installation
+      - Running in a VM or container without GPU access
+      - GPU hardware is not present
+  when: nvidia_verify.rc != 0
+
+- name: Get detailed GPU information
+  ansible.builtin.command: nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+  register: gpu_details
+  become: true
+  become_user: "{{ ansible_user }}"
+  when: nvidia_verify.rc == 0
+  changed_when: false
+  failed_when: false
+
+- name: Display detailed GPU information
+  ansible.builtin.debug:
+    msg: |
+      🎮 GPU Details:
+      {{ gpu_details.stdout_lines | join('\n      ') }}
+  when: nvidia_verify.rc == 0 and gpu_details.rc == 0

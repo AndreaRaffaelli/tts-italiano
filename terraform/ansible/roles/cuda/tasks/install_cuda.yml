@@ -1,0 +1,33 @@
+---
+- name: Download CUDA keyring
+  ansible.builtin.get_url:
+    url: "{{ cuda_keyring_url }}"
+    dest: "{{ cuda_keyring_file }}"
+    mode: '0644'
+
+- name: Install CUDA keyring
+  ansible.builtin.apt:
+    deb: "{{ cuda_keyring_file }}"
+    state: present
+
+- name: Update apt cache after adding CUDA repository
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Install CUDA drivers
+  ansible.builtin.apt:
+    name: cuda-drivers
+    state: present
+  register: cuda_install
+  notify:
+    - Reboot after CUDA installation
+    - Wait for system to come back online
+
+- name: Clean up CUDA keyring file
+  ansible.builtin.file:
+    path: "{{ cuda_keyring_file }}"
+    state: absent
+
+- name: Display CUDA installation message
+  ansible.builtin.debug:
+    msg: "🔧 CUDA drivers installed. System will reboot to load drivers if needed."

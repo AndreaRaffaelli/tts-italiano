@@ -1,0 +1,8 @@
+---
+# Additional CUDA-related variables can be defined here
+# These take precedence over defaults
+
+# Example: Different CUDA versions for different Ubuntu versions
+cuda_repos:
+  ubuntu2204: "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb"
+  ubuntu2004: "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb"
