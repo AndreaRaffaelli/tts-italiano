@@ -1,0 +1,37 @@
+---
+- name: Install PyTorch CPU version from requirements
+  ansible.builtin.pip:
+    name:
+      - torch
+      - torchvision
+      - torchaudio
+    extra_args: --index-url https://download.pytorch.org/whl/cpu
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Install other requirements (excluding PyTorch)
+  ansible.builtin.pip:
+    requirements: "/home/{{ ansible_user }}/speecht5_preprocessing/{{ requirements_file }}"
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+    extra_args: --no-deps
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Install transformers from GitHub
+  ansible.builtin.pip:
+    name: git+https://github.com/huggingface/transformers.git
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Install remaining dependencies
+  ansible.builtin.pip:
+    requirements: "/home/{{ ansible_user }}/speecht5_preprocessing/{{ requirements_file }}"
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"

@@ -1,0 +1,59 @@
+---
+- name: Create data processing directories
+  ansible.builtin.file:
+    path: "/home/{{ ansible_user }}/{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  become: true
+  become_user: "{{ ansible_user }}"
+  loop:
+    - "data/raw"
+    - "data/processed"
+    - "data/cache"
+    - "outputs"
+    - "logs"
+
+- name: Display completion message
+  ansible.builtin.debug:
+    msg: |
+      🎉 CPU Preprocessing Environment Setup Completed!
+
+      📁 Virtual environment created at: {{ venv_path }}
+      📊 Environment type: CPU-only for data preprocessing
+
+      🚀 To activate the environment:
+         source {{ venv_path }}/bin/activate
+         # OR
+         ./activate_speecht5_preprocess.sh
+         # OR
+         speecht5pp  (alias added to .bashrc)
+
+      🔍 To test the setup:
+         cd ~/speecht5_preprocessing
+         python test_setup.py
+
+      🤗 Hugging Face Authentication:
+      {% if local_hf_token.stat.exists %}
+         ✅ Token copied from local host and configured
+      {% else %}
+         ⚠️  Please run: hf auth login (to authenticate with Hugging Face)
+      {% endif %}
+
+      📁 Project structure created:
+         ~/speecht5_preprocessing/  (processing scripts)
+         ~/data/raw/               (raw input data)
+         ~/data/processed/         (processed data output)
+         ~/data/cache/             (temporary processing cache)
+         ~/outputs/                (final outputs)
+         ~/logs/                   (processing logs)
+
+      💡 Key features for preprocessing:
+         🔹 PyTorch CPU version (optimized for preprocessing)
+         🔹 Audio processing libraries (soundfile, librosa)
+         🔹 Data manipulation tools (datasets, pandas, numpy)
+         🔹 Scientific computing (scipy, scikit-learn)
+         🔹 Visualization tools (matplotlib, seaborn)
+
+      🚀 Ready for SpeechT5 data preprocessing tasks!

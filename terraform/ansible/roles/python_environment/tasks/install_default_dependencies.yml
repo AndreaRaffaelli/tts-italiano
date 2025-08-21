@@ -1,0 +1,50 @@
+---
+- name: Install default Python dependencies for preprocessing
+  ansible.builtin.pip:
+    name:
+      - datasets==3.6.0
+      - soundfile
+      - speechbrain
+      - accelerate
+      - librosa
+      - scipy
+      - numpy
+      - pandas
+      - tqdm
+      - matplotlib
+      - seaborn
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Install PyTorch CPU version
+  ansible.builtin.pip:
+    name:
+      - torch
+      - torchvision
+      - torchaudio
+    extra_args: --index-url https://download.pytorch.org/whl/cpu
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Install Transformers from GitHub (latest version)
+  ansible.builtin.pip:
+    name: git+https://github.com/huggingface/transformers.git
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Install additional preprocessing dependencies
+  ansible.builtin.pip:
+    name:
+      - pillow
+      - joblib
+      - scikit-learn
+    virtualenv: "{{ venv_path }}"
+    virtualenv_python: python{{ python_version }}
+  become: true
+  become_user: "{{ ansible_user }}"

@@ -1,0 +1,16 @@
+---
+- name: Setup Python Environment for SpeechT5 Data Preprocessing
+  hosts: all
+  become: true
+  vars:
+    python_version: "3.12"
+    venv_name: "speecht5_preprocess_env"
+    venv_path: "/home/{{ ansible_user }}/{{ venv_name }}"
+    requirements_file: "requirements.txt"
+
+  roles:
+    - system_packages
+    - python_environment
+    - speecht5_preprocessing
+    - huggingface_auth
+    - project_structure

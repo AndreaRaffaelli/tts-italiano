@@ -1,0 +1,43 @@
+---
+- name: Copy src directory to remote host
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../src/"
+    dest: "/home/{{ ansible_user }}/speecht5_preprocessing/"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Find Python scripts in speecht5_preprocessing directory
+  ansible.builtin.find:
+    paths: "/home/{{ ansible_user }}/speecht5_preprocessing/"
+    patterns: "*.py"
+  register: python_scripts
+  become: true
+  become_user: "{{ ansible_user }}"
+
+- name: Make Python scripts executable
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    mode: '0755'
+  loop: "{{ python_scripts.files }}"
+  become: true
+  become_user: "{{ ansible_user }}"
+  when: python_scripts.files | length > 0
+
+- name: Create activation script for preprocessing
+  ansible.builtin.template:
+    src: activate_script.sh.j2
+    dest: "/home/{{ ansible_user }}/activate_speecht5_preprocess.sh"
+    mode: '0755'
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Create simple preprocessing test script
+  ansible.builtin.template:
+    src: test_setup.py.j2
+    dest: "/home/{{ ansible_user }}/speecht5_preprocessing/test_setup.py"
+    mode: '0755'
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
